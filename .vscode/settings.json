@@ -1,5 +1,5 @@
 {
-    "files.associations": {
-        "**/*.playbook.yml": "ansible"
-    },
+    "yaml.schemas": {
+        "http://json.schemastore.org/ansible-stable-2.9": "**/*.playbook.yml"
+    }
 }
