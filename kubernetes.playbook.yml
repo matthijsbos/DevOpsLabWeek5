@@ -1,0 +1,99 @@
+---
+# Bootstrap python on hosts
+- hosts: all
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: Check for Python 3
+      raw: test -e /usr/bin/python3
+      changed_when: false
+      failed_when: false
+      register: check_python
+    - name: Install Python 3
+      raw: yum -y install python3-minimal
+      when: check_python.rc != 0    
+
+# install packages
+- hosts: all
+  become: yes
+  tasks:
+    - name: Install packages
+      apt:
+        cache_valid_time: 3600 #seconds
+        name:
+          - docker.io
+          - ca-certificates
+          - apt-transport-https
+    - name: Add Google cloud signing key
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+    - name: Add kubernetes package repository
+      apt_repository:
+        repo: deb http://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+        update_cache: yes
+    - name: Install packages
+      apt:
+        cache_valid_time: 3600 #seconds
+        name:
+          - kubelet
+          - kubeadm
+          - kubernetes-cni
+    - name: Ensure docker service started and enabled
+      service:
+        name: docker
+        enabled: yes
+        state: started
+        
+# Kubernetes masters
+- hosts: kubernetes_masters
+  become: yes
+  tasks:
+    - name: Check admin.conf file exists.
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: k8s_conf    
+    - name: initialize kubeadm
+      shell: "kubeadm init --ignore-preflight-errors=NumCPU"
+      when: k8s_conf.stat.exists == False
+    - name: Create a directory if it does not exist
+      file:
+        path: "{{ ansible_env.HOME }}/.kube"
+        state: directory
+        mode: "0755"
+        owner: ubuntu
+        group: ubuntu
+    - name: copy kubernetes config to user dir
+      copy:
+        src: "{{ k8s_conf.stat.path }}"
+        dest: "{{ ansible_env.HOME }}/.kube/config"
+        remote_src: yes
+        mode: "0755"
+        owner: ubuntu
+        group: ubuntu
+      when: k8s_conf.stat.exists == True
+    - name: Use sysctl to set up network bridge with name net.bridge.bridge-nf-call-iptables to 1
+      sysctl:
+        name: net.bridge.bridge-nf-call-iptables
+        value: '1'
+        state: present
+    - name: Install the Weave Net addon
+      shell: kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
+    - name: Allow master to schedule pods
+      shell: "kubectl taint nodes --all node-role.kubernetes.io/master-"
+    - name: Create the 'join' command to be used in the next play by all the workers
+      shell: kubeadm token create --print-join-command
+      register: k8s_join_command
+    - debug: "{{ k8s_join_command.stdout }}"
+
+# Kubernetes workers
+- hosts: kubernetes_workers
+  become: yes
+  tasks:
+    - name: Worker join master
+      shell: "{{ k8s_join_command.stdout }}"
+    
+    
