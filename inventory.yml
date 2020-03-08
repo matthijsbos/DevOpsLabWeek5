@@ -1,0 +1,13 @@
+all:
+  children:
+    kubernetes_masters:
+      hosts:
+        ec2-54-165-160-205.compute-1.amazonaws.com:
+    kubernetes_workers:
+      hosts:
+        ec2-3-93-152-104.compute-1.amazonaws.com:
+        ec2-3-92-137-248.compute-1.amazonaws.com:
+  vars:
+    ansible_ssh_private_key_file: "{{ lookup('env','HOME') }}/Lab5.pem"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_ssh_user: ubuntu
