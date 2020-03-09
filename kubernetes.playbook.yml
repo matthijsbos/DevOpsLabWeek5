@@ -19,6 +19,10 @@
 - hosts: all
   become: yes
   tasks:
+    - name: Upgrade installed packages
+      apt:
+        cache_valid_time: 3600 #seconds
+        upgrade: yes
     - name: Install packages
       apt:
         cache_valid_time: 3600 #seconds
@@ -26,6 +30,11 @@
           - docker.io
           - ca-certificates
           - apt-transport-https
+    - name: Ensure ubuntu user is part of docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
     - name: Add Google cloud signing key
       apt_key:
         url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
@@ -50,13 +59,14 @@
         
 # Kubernetes masters
 - hosts: kubernetes_masters
-  become: yes
   tasks:
     - name: Check admin.conf file exists.
+      become: yes
       stat:
         path: /etc/kubernetes/admin.conf
       register: k8s_conf    
     - name: initialize kubeadm
+      become: yes
       shell: "kubeadm init --ignore-preflight-errors=NumCPU"
       when: k8s_conf.stat.exists == False
     - name: Create a directory if it does not exist
@@ -67,6 +77,7 @@
         owner: ubuntu
         group: ubuntu
     - name: copy kubernetes config to user dir
+      become: yes
       copy:
         src: "{{ k8s_conf.stat.path }}"
         dest: "{{ ansible_env.HOME }}/.kube/config"
@@ -76,24 +87,58 @@
         group: ubuntu
       when: k8s_conf.stat.exists == True
     - name: Use sysctl to set up network bridge with name net.bridge.bridge-nf-call-iptables to 1
+      become: yes
       sysctl:
         name: net.bridge.bridge-nf-call-iptables
         value: '1'
         state: present
     - name: Install the Weave Net addon
-      shell: kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
+      shell: "kubectl apply -f \"https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')\""
     - name: Allow master to schedule pods
-      shell: "kubectl taint nodes --all node-role.kubernetes.io/master-"
+      shell: kubectl taint nodes --all node-role.kubernetes.io/master-
+      ignore_errors: yes
     - name: Create the 'join' command to be used in the next play by all the workers
       shell: kubeadm token create --print-join-command
       register: k8s_join_command
-    - debug: "{{ k8s_join_command.stdout }}"
-
+    - name: print join command
+      debug: 
+        msg: "{{ k8s_join_command.stdout }}"
+    - name: Add k8s_join_command to k8s_master dummy host
+      add_host:
+        name: "k8s_master"
+        k8s_join_command: "{{ k8s_join_command.stdout }}"
 # Kubernetes workers
 - hosts: kubernetes_workers
   become: yes
   tasks:
+    - name: Check kubelet.conf file exists.
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf    
     - name: Worker join master
-      shell: "{{ k8s_join_command.stdout }}"
-    
-    
+      shell: "{{ hostvars['k8s_master']['k8s_join_command'] }}"
+      when: kubelet_conf.stat.exists == False
+
+# List connected workers to master
+- hosts: kubernetes_masters
+  tasks:
+    - shell: kubectl get nodes
+      register: k8s_nodes
+    - debug:
+        var: k8s_nodes.stdout_lines
+#Install metrics server
+- hosts: kubernetes_masters
+  tasks:
+    - name: Install packages
+      become: yes
+      apt:
+        cache_valid_time: 3600 #seconds
+        name:
+          - zip
+    - name: Downloads and unzip the Metrics Server files
+      unarchive:
+        remote_src: yes
+        src: https://surfdrive.surf.nl/files/index.php/s/RCxPtHnz1agrY7V/download
+        dest: "{{ ansible_env.HOME }}"
+    - name: 
+      shell: "kubectl create -f {{ ansible_env.HOME }}/kubernetes/"
